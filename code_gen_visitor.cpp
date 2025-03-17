@@ -255,6 +255,7 @@ llvm::Value* LLVMCodeGenVisitor::visitAtom(std::shared_ptr<AtomNode> node) {
 llvm::Value* LLVMCodeGenVisitor::visitList(std::shared_ptr<ListNode> node) {
     std::cout << "DEBUG: Visiting list" << std::endl;
     if (node->children.empty()) {
+        std::cout << "DEBUG: visitList: Empty list" << std::endl;
         // Empty list evaluates to null/void
         return llvm::UndefValue::get(context.getVoidType());
     }
@@ -263,15 +264,21 @@ llvm::Value* LLVMCodeGenVisitor::visitList(std::shared_ptr<ListNode> node) {
     if (!node->children.empty() && 
         node->children[0]->nodeType == ASTNode::NodeType::ATOM) {
         
+        std::cout << "DEBUG: visitList: Checking if first child is an atom" << std::endl;
         auto firstChild = std::static_pointer_cast<AtomNode>(node->children[0]);
         if (firstChild->atomType == TokenType::SYMBOL) {
             std::string formName = std::get<std::string>(firstChild->value);
+            std::cout << "DEBUG: visitList: Form name: " << formName << std::endl;
             auto it = specialForms.find(formName);
             if (it != specialForms.end()) {
-                return (this->*(it->second))(node);
+                std::cout << "DEBUG: visitList: Calling special form: " << formName << std::endl;
+                llvm::Value* result = (this->*(it->second))(node);
+                std::cout << "DEBUG: visitList done with special form" << std::endl;
+                return result;
             }
         }
     }
+
     
     // This is a function call
     // Get the function name (first element of the list)
@@ -417,6 +424,7 @@ llvm::Value* LLVMCodeGenVisitor::visitFunction(std::shared_ptr<FunctionNode> nod
 }
 
 llvm::Value* LLVMCodeGenVisitor::visitIf(std::shared_ptr<ListNode> node) {
+    std::cout << "DEBUG: visitIf" << std::endl;
     // (if condition then-expr else-expr)
     if (node->children.size() < 3 || node->children.size() > 4) {
         context.addError("If expression requires 2 or 3 arguments");
@@ -427,21 +435,52 @@ llvm::Value* LLVMCodeGenVisitor::visitIf(std::shared_ptr<ListNode> node) {
     llvm::Value* condValue = visit(node->children[1]);
     if (!condValue) return nullptr;
     
+    std::cout << "DEBUG: If condition type: " << condValue->getType()->getTypeID() << std::endl;
+    
     // Convert to boolean if needed
-    if (condValue->getType() != context.getBoolType()) {
-        condValue = context.getBuilder().CreateICmpNE(
-            condValue, 
-            llvm::ConstantInt::get(condValue->getType(), 0),
-            "ifcond");
+    if (!condValue->getType()->isIntegerTy(1)) {
+        // For integer types, compare not equal to zero
+        if (condValue->getType()->isIntegerTy()) {
+            condValue = context.getBuilder().CreateICmpNE(
+                condValue, 
+                llvm::ConstantInt::get(condValue->getType(), 0),
+                "ifcond");
+        }
+        // For floating point types, compare not equal to zero
+        else if (condValue->getType()->isFloatingPointTy()) {
+            condValue = context.getBuilder().CreateFCmpONE(
+                condValue,
+                llvm::ConstantFP::get(condValue->getType(), 0.0),
+                "ifcond");
+        }
+        else {
+            context.addError("Condition must be a boolean, integer, or floating point value");
+            return nullptr;
+        }
     }
     
+    std::cout << "DEBUG: Converted condition type: " << condValue->getType()->getTypeID() << std::endl;
+    
+    // Get the current function
     llvm::Function* function = context.getCurrentFunction();
+    if (!function) {
+        llvm::BasicBlock* currentBB = context.getBuilder().GetInsertBlock();
+        if (currentBB) {
+            function = currentBB->getParent();
+        }
+        
+        if (!function) {
+            context.addError("Cannot evaluate if expression outside of a function context");
+            return nullptr;
+        }
+    }
     
     // Create basic blocks for then, else, and merge
     llvm::BasicBlock* thenBB = llvm::BasicBlock::Create(context.getContext(), "then", function);
     llvm::BasicBlock* elseBB = llvm::BasicBlock::Create(context.getContext(), "else");
     llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(context.getContext(), "ifcont");
     
+    // Create conditional branch using the condition value
     context.getBuilder().CreateCondBr(condValue, thenBB, elseBB);
     
     // Generate code for 'then' block
@@ -453,8 +492,7 @@ llvm::Value* LLVMCodeGenVisitor::visitIf(std::shared_ptr<ListNode> node) {
     thenBB = context.getBuilder().GetInsertBlock();
     
     // Generate code for 'else' block
-    // Add elseBB to the function
-    elseBB->insertInto(function);
+    elseBB->insertInto(function);  // Add elseBB to the function
     context.getBuilder().SetInsertPoint(elseBB);
     
     llvm::Value* elseValue = nullptr;
@@ -470,8 +508,7 @@ llvm::Value* LLVMCodeGenVisitor::visitIf(std::shared_ptr<ListNode> node) {
     elseBB = context.getBuilder().GetInsertBlock();
     
     // Generate code for merge block
-    // Add mergeBB to the function
-    mergeBB->insertInto(function);
+    mergeBB->insertInto(function);  // Add mergeBB to the function
     context.getBuilder().SetInsertPoint(mergeBB);
     
     // Create PHI node for result
@@ -480,6 +517,16 @@ llvm::Value* LLVMCodeGenVisitor::visitIf(std::shared_ptr<ListNode> node) {
     
     phi->addIncoming(thenValue, thenBB);
     phi->addIncoming(elseValue, elseBB);
+    
+    // Store the current insert point
+    llvm::BasicBlock* currentBlock = context.getBuilder().GetInsertBlock();
+    
+    // Check if we're at the top level of a function (i.e., not nested in another expression)
+    // We can't use getBasicBlockList() directly, so we'll use a different approach
+    bool isTopLevel = false;
+    
+    // If this is the only block or we're in a simple function, it might be top level
+    // We'll just return the PHI node and let the caller handle termination
     
     return phi;
 }

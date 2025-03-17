@@ -390,19 +390,53 @@ std::optional<int> SimpleJIT::compileAndRunExpression(const std::shared_ptr<ASTN
         Value* result = generateCodeFromAST(expr, Builder);
         std::cout << "Generated code for expression" << std::endl;
 
+        // Print the generated LLVM IR for debugging
+        std::string IRString;
+        llvm::raw_string_ostream IRStream(IRString);
+        M->print(IRStream, nullptr);
+        std::cout << "Generated LLVM IR:\n" << IRString << std::endl;
 
         if (!result) {
             std::cerr << "Failed to generate code for expression" << std::endl;
             return std::nullopt;
         }
         
-        // Return the result
-        Builder.CreateRet(result);
-        std::cout << "Created return statement" << std::endl;
+        // Check if the current basic block already has a terminator
+        BasicBlock *currentBB = Builder.GetInsertBlock();
+        if (!currentBB->getTerminator()) {
+            // Return the result
+            Builder.CreateRet(result);
+            std::cout << "Created return statement" << std::endl;
+        }
         
-        // Skip verification for now to avoid segmentation fault
-        // We'll add safer verification later if needed
-        std::cout << "Skipping verification to avoid potential crashes" << std::endl;
+        // Check all basic blocks in the function to ensure they have terminators
+        for (auto &BB : *MainFunc) {
+            if (!BB.getTerminator()) {
+                std::cout << "Adding missing terminator to block: " << BB.getName().str() << std::endl;
+                
+                // If this is the ifcont block with a PHI node, use that as the return value
+                if (BB.getName() == "ifcont" && !BB.empty() && isa<PHINode>(BB.front())) {
+                    PHINode *phi = cast<PHINode>(&BB.front());
+                    IRBuilder<> FixBuilder(&BB);
+                    FixBuilder.CreateRet(phi);
+                } else {
+                    // Otherwise, add a default return value
+                    IRBuilder<> FixBuilder(&BB);
+                    FixBuilder.CreateRet(ConstantInt::get(Type::getInt32Ty(*Ctx.getContext()), 0));
+                }
+            }
+        }
+        
+        // Validate the module
+        std::string verifyErrors;
+        llvm::raw_string_ostream errorStream(verifyErrors);
+        
+        if (llvm::verifyModule(*M, &errorStream)) {
+            std::cerr << "Module verification failed: " << verifyErrors << std::endl;
+            return std::nullopt;
+        }
+        
+        std::cout << "Module verified successfully" << std::endl;
         
         // Add the module to JIT
         if (auto Err = addFunctionModule(std::move(M), exprFuncName)) {

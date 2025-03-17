@@ -281,6 +281,27 @@ void test_parser() {
         assert(expressions[0]->parameters[0] == "a");
         assert(expressions[0]->parameters[1] == "b");
         assert(expressions[0]->body.size() == 1);
+
+        // Check the body of the function (if expression)
+        auto bodyNode = expressions[0]->body[0];
+        assert(bodyNode->nodeType == ASTNode::NodeType::LIST);
+        auto listNode = std::static_pointer_cast<ListNode>(bodyNode);
+        
+        // Check that it's an 'if' expression
+        assert(listNode->children.size() == 4);
+        assert(listNode->children[0]->nodeType == ASTNode::NodeType::ATOM);
+        auto ifNode = std::static_pointer_cast<AtomNode>(listNode->children[0]);
+        assert(ifNode->atomType == TokenType::SYMBOL);
+        assert(std::get<std::string>(ifNode->value) == "if");
+        
+        // Check the condition (> a b)
+        assert(listNode->children[1]->nodeType == ASTNode::NodeType::LIST);
+        auto conditionNode = std::static_pointer_cast<ListNode>(listNode->children[1]);
+        assert(conditionNode->children.size() == 3);
+        assert(conditionNode->children[0]->nodeType == ASTNode::NodeType::ATOM);
+        auto gtNode = std::static_pointer_cast<AtomNode>(conditionNode->children[0]);
+        assert(gtNode->atomType == TokenType::SYMBOL);
+        assert(std::get<std::string>(gtNode->value) == ">");
         
         std::string result = expressions[0]->toString();
         test_equal(result, "(defn max [a b] (if (> a b) a b))", "Function with multiple parameters");
