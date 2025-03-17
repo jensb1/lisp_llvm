@@ -17,13 +17,11 @@ void runRepl() {
     bool multilineInput = false;
     int parenBalance = 0;
     
-    // Create our JIT compiler
     SimpleJIT TheJIT;
     
-    std::cout << "Lisp JIT REPL - Enter expressions or commands:" << std::endl;
+    std::cout << "Lisp JIT REPL - Enter expressions:" << std::endl;
     std::cout << "  'exit' to quit" << std::endl;
-    std::cout << "  'eval <expr>' to evaluate an expression" << std::endl;
-    std::cout << "  'def <name> <expr>' to define a named function" << std::endl;
+    std::cout << " try: (defn factorial [n] (if (= n 0) 1 (* n (factorial (- n 1))))) (factorial 5)" << std::endl;
     std::cout << "--------------------------------------------------------" << std::endl;
     
     while (true) {
@@ -55,95 +53,29 @@ void runRepl() {
         if (parenBalance <= 0 || line.empty()) {
             if (!input.empty()) {
                 try {
-                    // Check if this is a special command
-                    std::istringstream iss(input);
-                    std::string command;
-                    iss >> command;
                     
-                    if (command == "eval") {
-                        // Extract the expression part (everything after "eval ")
-                        std::string exprStr = input.substr(5);
-                        
-                        // Tokenize the expression
-                        LispLexer lexer(exprStr);
-                        std::vector<Token> tokens = lexer.scanTokens();
-                        
-                        // Parse the tokens
-                        LispParser parser(tokens);
-                        std::vector<std::shared_ptr<ASTNode>> expressions = parser.parse();
-                        
-                        if (!expressions.empty()) {
-                            // Print the parsed expression
-                            std::cout << "Parsed: " << expressions[0]->toString() << std::endl;
-                            
-                            // Generate a unique function name
-                            static int evalCounter = 0;
-                            std::string funcName = "eval_" + std::to_string(evalCounter++);
-                            
-                            // Add the AST as a function to the JIT
-                            if (auto Err = TheJIT.addASTFunction(expressions[0], funcName)) {
-                                llvm::errs() << "Error adding AST function: ";
-                                llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "");
-                                continue;
-                            }
-                            
-                            // Look up and call the function
-                            auto FuncOrErr = TheJIT.lookupASTFunction(funcName);
-                            if (!FuncOrErr) {
-                                llvm::errs() << "Failed to look up AST function: ";
-                                llvm::logAllUnhandledErrors(FuncOrErr.takeError(), llvm::errs(), "");
-                                continue;
-                            }
-                            auto Func = *FuncOrErr;
-                            
-                            // Call the function and print the result
-                            int result = Func();
-                            std::cout << "=> " << result << std::endl;
-                        }
-                    }
-                    else if (command == "def") {
-                        std::string funcName;
-                        iss >> funcName;
-                        
-                        // Extract the expression part (everything after "def <name> ")
-                        size_t pos = input.find(funcName) + funcName.length();
-                        std::string exprStr = input.substr(pos);
-                        
-                        // Tokenize the expression
-                        LispLexer lexer(exprStr);
-                        std::vector<Token> tokens = lexer.scanTokens();
-                        
-                        // Parse the tokens
-                        LispParser parser(tokens);
-                        std::vector<std::shared_ptr<ASTNode>> expressions = parser.parse();
-                        
-                        if (!expressions.empty()) {
-                            // Print the parsed expression
-                            std::cout << "Defining function '" << funcName << "' as: " 
-                                      << expressions[0]->toString() << std::endl;
-                            
-                            // Add the AST as a function to the JIT
-                            if (auto Err = TheJIT.addASTFunction(expressions[0], funcName)) {
-                                llvm::errs() << "Error defining function: ";
-                                llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "");
-                                continue;
-                            }
-                            
-                            std::cout << "=> Function '" << funcName << "' defined successfully" << std::endl;
-                        }
-                    }
-                    else {
-                        // Regular expression parsing and display (no JIT compilation)
-                        LispLexer lexer(input);
-                        std::vector<Token> tokens = lexer.scanTokens();
-                        
-                        // Parse the tokens
-                        LispParser parser(tokens);
-                        std::vector<std::shared_ptr<ASTNode>> expressions = parser.parse();
-                        
+                    LispLexer lexer(input);
+                    std::vector<Token> tokens = lexer.scanTokens();
+                    
+                    // Parse the tokens
+                    LispParser parser(tokens);
+                    std::vector<std::shared_ptr<ASTNode>> expressions = parser.parse();
+                    
+                    if (!expressions.empty()) {
                         // Print the parsed expressions
+                        std::cout << "Parsed: ";
                         for (const auto& expr : expressions) {
-                            std::cout << "=> " << expr->toString() << std::endl;
+                            std::cout << expr->toString() << " ";
+                        }
+                        std::cout << std::endl;
+                        
+                        // Compile and run the expressions directly using SimpleJIT
+                        auto resultValue = TheJIT.compileAndRunProgram(expressions);
+                        
+                        if (resultValue.has_value()) {
+                            std::cout << "=> " << resultValue.value() << std::endl;
+                        } else {
+                            std::cerr << "Error: Failed to evaluate expression" << std::endl;
                         }
                     }
                 } catch (const std::exception& e) {
@@ -165,10 +97,6 @@ void runRepl() {
 }
 
 int main() {
-    // Initialize LLVM targets
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
     
     runRepl();
     return 0;
